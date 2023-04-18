@@ -17,7 +17,7 @@ protocol RecordPresenterOutput: AnyObject {
 // view to presenter
 protocol RecordPresenterInput: AnyObject {
     // 録画状態の変更通知
-    func onRecordState(state: RecordState)
+    func onChangeRecordState(state: RecordState)
     func onChangeCameraFocus(point: CGPoint)
     func onChangedPinchGesture(state: Bool, pinchZoomScale: Float)
 }
@@ -38,8 +38,8 @@ extension RecordPresenter: RecordPresenterInput {
         self.model?.onChangeCameraFocus(point: point)
     }
     
-    func onRecordState(state: RecordState) {
-        
+    func onChangeRecordState(state: RecordState) {
+        self.model?.onChangeRecordState(state: state)
     }
     
     func onChangedPinchGesture(state: Bool, pinchZoomScale: Float) {

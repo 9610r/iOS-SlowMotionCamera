@@ -12,6 +12,7 @@ class RecordViewController: UIViewController, UIGestureRecognizerDelegate {
     
     
     @IBOutlet weak var cameraPreview: UIImageView!
+    @IBOutlet weak var recordButton: UIButton!
     private var forcusBoxView = UIView()
     
     private var presenter: RecordPresenterInput?
@@ -19,13 +20,19 @@ class RecordViewController: UIViewController, UIGestureRecognizerDelegate {
     private var previewLayer: AVCaptureVideoPreviewLayer?
     private var pinchGestureRecognizer: UIPinchGestureRecognizer = UIPinchGestureRecognizer()
     
+    private(set) var recorfState: RecordState = .STOP
     
     override func viewDidLoad() {
         super.viewDidLoad()
         // Do any additional setup after loading the view.
         
         self.presenter = RecordPresenter(view: self)
+        //  ボタンの画像サイズ変更
         
+        recordButton.imageView?.contentMode = .scaleAspectFit
+        recordButton.imageView?.tintColor = .red
+        recordButton.contentHorizontalAlignment = .fill
+        recordButton.contentVerticalAlignment = .fill
         // フォーカス用の黄色い枠線を作成
         forcusBoxView.frame = self.cameraPreview.frame
         forcusBoxView.layer.borderWidth = 1
@@ -46,6 +53,24 @@ class RecordViewController: UIViewController, UIGestureRecognizerDelegate {
         self.view.addGestureRecognizer(tapGestureRecognizer)
         self.view.addGestureRecognizer(pinchGestureRecognizer)
         
+    }
+    
+    
+    @IBAction func pushRecordButton(_ sender: Any) {
+        switch self.recorfState {
+        case .STOP:  // 撮影が停止している時
+            // 撮影を開始する
+            self.recorfState = .START
+            self.presenter?.onChangeRecordState(state: .START)
+            self.recordButton.setImage(UIImage(named: "stop_button"), for: .normal)
+        case .START:  // 撮影している時
+            // 撮影を停止する
+            self.recorfState = .STOP
+            self.presenter?.onChangeRecordState(state: .STOP)
+            self.recordButton.setImage(UIImage(named: "record_button"), for: .normal)
+        case .ERROR:
+            debugPrint("Error")
+        }
     }
     
     /// ピンチイン/ピンチアウト処理

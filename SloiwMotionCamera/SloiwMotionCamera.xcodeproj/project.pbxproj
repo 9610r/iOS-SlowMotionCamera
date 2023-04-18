@@ -19,7 +19,6 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		772358C329E6AA120091F4E0 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		774B149029D28C4B0030788A /* SloiwMotionCamera.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SloiwMotionCamera.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		774B149329D28C4C0030788A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		774B149529D28C4C0030788A /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
@@ -47,7 +46,6 @@
 		774B148729D28C4B0030788A = {
 			isa = PBXGroup;
 			children = (
-				772358C329E6AA120091F4E0 /* README.md */,
 				774B149229D28C4B0030788A /* SloiwMotionCamera */,
 				774B149129D28C4B0030788A /* Products */,
 			);

@@ -8,11 +8,11 @@
 import Foundation
 import AVFoundation
 import Photos
+import AssetsLibrary
 
 enum RecordState {
     case STOP
     case START
-    case LOADING
     case ERROR
 }
 
@@ -37,6 +37,7 @@ struct RecordDeviceInfo {
 struct CameraZoomScale: Comparable {
     var currentDevice: AVCaptureDevice.DeviceType
     var zoomScale: Double
+    var fileURL: URL?
     
     // より広角なカメラを大きい値として扱う
     static func < (lhs: CameraZoomScale, rhs: CameraZoomScale) -> Bool {
@@ -117,13 +118,14 @@ protocol RecordModelOutput: AnyObject {
 
 // Presenter to Model
 protocol RecordModelInput: AnyObject {
-    func changeRecordState(state: RecordState)
+    func onChangeRecordState(state: RecordState)
     func onChangeCameraFocus(point: CGPoint)
     func onChangeCameraZoom(state: Bool, pinchZoomScale: Float)
 }
 
 
 class RecordModel: NSObject {
+    
     // Delegate
     private weak var presenter: RecordModelOutput?
     
@@ -140,9 +142,7 @@ class RecordModel: NSObject {
     private var videoDeviceInput: AVCaptureDeviceInput?
     let videoOutput = AVCaptureVideoDataOutput()
     var recordingURL: URL?
-    var assetWriter: AVAssetWriter!
-    var assetWriterInput: AVAssetWriterInput!
-    var assetWriterInputPixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor!
+    var fileOutput: AVCaptureMovieFileOutput!
     
     private var beforeZoomScale: Double = 0.0
     private var recordInfo: RecordDeviceInfo
@@ -161,33 +161,19 @@ class RecordModel: NSObject {
     
     /// キャプチャデバイスのセッション開始処理
     func setupSession() throws{
-        videoDevice = setupVideoDevice()
-        guard let videoDevice = videoDevice else {throw AVCaptureError.deviceNotFound}
-        let videoDeviceInput = try AVCaptureDeviceInput(device: videoDevice)
-        
-        // セッションが動作中であれば停止させる
-        if captureSession.isRunning {
-            captureSession.stopRunning()
-        }
-        
-        captureSession.beginConfiguration()
-        
-        if captureSession.canAddInput(videoDeviceInput) {
-            captureSession.addInput(videoDeviceInput)
-            self.videoDeviceInput = videoDeviceInput
-        }
-        
-        let videoDataOutput = AVCaptureVideoDataOutput()
-        let videoDataOutputQueue = DispatchQueue(label: "videoDataOutputQueue", qos: .userInteractive)
-        videoDataOutput.setSampleBufferDelegate(self, queue: videoDataOutputQueue)
-        
-        if captureSession.canAddOutput(videoDataOutput) {
-            captureSession.addOutput(videoDataOutput)
-        }
-        
+        // ビデオをセッションのInputに追加.
+        let videoInput = try! AVCaptureDeviceInput.init(device: setupVideoDevice()!)
+        self.captureSession.addInput(videoInput)
+        // オーディオをセッションに追加.
+        let audioInput = try! AVCaptureDeviceInput.init(device: setupAudioDevice())
+        self.captureSession.addInput(audioInput)
+        // 動画の保存.
+        self.fileOutput = AVCaptureMovieFileOutput()
+        // ビデオ出力をOutputに追加.
+        self.captureSession.addOutput(self.fileOutput)
+        // バッググラウンドスレッドで実行
         Task {
-            captureSession.commitConfiguration()
-            captureSession.startRunning()
+            self.captureSession.startRunning()
         }
         // カメラのセットアップ完了を通知する
         self.presenter?.onCompIntialize(session: captureSession)
@@ -252,116 +238,164 @@ class RecordModel: NSObject {
         return true
     }
     
-    
     // MARK: 録画開始・停止処理
-    
     func startRecording() {
+        let datetimeString = self.getNowTimeString()
+        // 保存用ファイル名とURL生成
+        let tempDirectory: URL = URL(fileURLWithPath: NSTemporaryDirectory())
+        self.recordingURL = tempDirectory.appendingPathComponent("\(datetimeString).mov")
+        if let fileURL = self.recordingURL {
+            print("録画開始 : \(fileURL.absoluteString)")
+            fileOutput?.startRecording(to: fileURL, recordingDelegate: self)
+            //        assetWriter.startSession(atSourceTime: .zero)
+            print("START RECORD")
+        }
+    }
+    
+    /// 新しいファイル名を取得
+    ///
+    /// - Returns: ファイル名
+    private func getNowTimeString() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMddHHmmssSSSSSS"
+        formatter.locale = NSLocale.system
+        let datetime = formatter.string(from: Date())
         
-        // Start recording
-        assetWriter.startWriting()
-        captureSession.startRunning()
-        assetWriter.startSession(atSourceTime: .zero)
-
+        return String("\(datetime)")
     }
     
-    func setupWritter() {
-        // Set up the asset writer
-        let documentsDirectory = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)[0]
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        let date = dateFormatter.string(from: Date())
-        let fileName = "\(date).mov"
-        recordingURL = URL(fileURLWithPath: "\(documentsDirectory)/\(fileName)")
-        do {
-            assetWriter = try AVAssetWriter(outputURL: recordingURL!, fileType: .mov)
-        } catch {
-            print(error.localizedDescription)
-            return
-        }
-        self.recordInfo.videoSettings = videoOutput.recommendedVideoSettingsForAssetWriter(writingTo: .mov)
-        assetWriterInput = AVAssetWriterInput(mediaType: .video, outputSettings: self.recordInfo.videoSettings)
-        assetWriterInput.expectsMediaDataInRealTime = true
-        if assetWriter.canAdd(assetWriterInput) {
-            assetWriter.add(assetWriterInput)
-        }
-        assetWriterInputPixelBufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: assetWriterInput, sourcePixelBufferAttributes: nil)
+    /// 動画保存用のURLを取得する
+    /// - Returns: URL
+    private func createVideoUrl() -> URL? {
+        let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let fileName = "\(self.getNowTimeString()).mov"
+        let videoUrl = documentsDirectory.appendingPathComponent(fileName)
+        
+        return videoUrl
     }
-    
-    
     /// 録画を停止する
     func stopRecording() {
-       // Stop recording
-        assetWriterInput.markAsFinished()
-        assetWriter.finishWriting {
-            PHPhotoLibrary.shared().performChanges({
-                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: self.recordingURL!)
-            }) { saved, error in
-                if let error = error {
-                    print(error.localizedDescription)
-                } else {
-                    print("動画を保存しました")
+        print("RECORD STOP")
+        fileOutput.stopRecording()
+    }
+    
+    /// 指定の FPS のフォーマットに切り替える (その FPS で最大解像度のフォーマットを選ぶ)
+    /// - parameter desiredFps: 切り替えたい FPS (AVFrameRateRange.maxFrameRate が Double なので合わせる)
+    private func switchFormat(desiredFps: Double) {
+        let isRunning = captureSession.isRunning
+        // セッションが動いていたら停止しておく
+        if isRunning {
+            captureSession.stopRunning()
+        }
+        var selectedFormat: AVCaptureDevice.Format! = nil
+        var currentMaxWidth: Int32 = 0
+        
+        guard let videoDevice = self.videoDevice else {
+            print("デバイスが見つかりません。")
+            return
+        }
+        for format in videoDevice.formats {
+            // フォーマット内の情報を抜き出す (for in と書いているが1つの format につき1つの range しかない)
+            for range: AVFrameRateRange in format.videoSupportedFrameRateRanges {
+                let description = format.formatDescription as CMFormatDescription
+                // 幅と高さ情報を取得
+                let dimensions = CMVideoFormatDescriptionGetDimensions(description)
+                let width = dimensions.width
+                
+                // フルHD以下で一番大きい解像度を取得
+                if desiredFps == range.maxFrameRate && currentMaxWidth <= width && width <= 1920 {
+                    selectedFormat = format
+                    currentMaxWidth = width
                 }
             }
         }
-        captureSession.stopRunning()
-    }
-    
-    
-    /// ズーム値を合算する
-    /// - Parameters:
-    ///   - currentZoom: 現在のズーム値
-    ///   - pinchVal: ピンチの倍率
-    func sumZoomVal<T>(_ currentZoom: inout T, _ pinchVal: T) where T: Numeric {
-        currentZoom = currentZoom + pinchVal
+        
+        // フォーマットが取得できていれば設定する
+        if selectedFormat != nil {
+            do {
+                if let videoDevice = self.videoDevice {
+                    try videoDevice.lockForConfiguration()  // ロックできなければ例外を投げる
+                    videoDevice.activeFormat = selectedFormat
+                    videoDevice.activeVideoMinFrameDuration = CMTimeMake(value: 1, timescale: Int32(desiredFps))
+                    videoDevice.activeVideoMaxFrameDuration = CMTimeMake(value: 1, timescale: Int32(desiredFps))
+                    videoDevice.unlockForConfiguration()
+                    // セッションが停止していたら再開する
+                    if isRunning {
+                        self.captureSession.startRunning()
+                    }
+                }
+            }
+            catch {
+                print("フォーマット・フレームレートが指定できなかった : \(desiredFps) fps")
+            }
+        }
+        else {
+            print("フォーマットが取得できなかった : \(desiredFps) fps")
+        }
     }
 }
 
 enum AVCaptureError: Error {
     case deviceNotFound
     case overMemory
+    case notCompleteSaved
 }
 
-extension RecordModel: AVCaptureVideoDataOutputSampleBufferDelegate {
-    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-//        // サンプルバッファを処理する
-//        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-//        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-//        while !assetWriterInput.isReadyForMoreMediaData {
-//            Thread.sleep(forTimeInterval: 0.01)
-//        }
-//        assetWriterInputPixelBufferAdaptor.append(pixelBuffer, withPresentationTime: presentationTime)
+extension RecordModel: AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureFileOutputRecordingDelegate {
+    
+    /*
+     動画のキャプチャーが終わった時に呼ばれるメソッド.
+     */
+    func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
+        guard let currentVideoUrl = self.recordingURL else { return }
+        PHPhotoLibrary.shared().performChanges({
+            PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: currentVideoUrl)
+        }) { _, error in
+            if let error = error {
+                AVCaptureError.notCompleteSaved
+                print("保存に失敗しました。")
+            }
+        }
+        print("完了")
     }
 }
 
 extension RecordModel: RecordModelInput {
-    func changeRecordState(state: RecordState) {
-        
+    func onChangeRecordState(state: RecordState) {
+        switch state {
+        case .STOP:
+            self.stopRecording()
+        case .START:
+            self.startRecording()
+        case .ERROR:
+            return
+        }
     }
     
     /// タップしたカメラ座標にピントのフォーカスを行う
     /// - Parameter point: xy座標
     func onChangeCameraFocus(point: CGPoint) {
-//        do {
-            if let currentDevice = videoDevice {
-                try? currentDevice.lockForConfiguration()
-                // TODO: カメラ切り替え後にたまにフォーカスがサポートされていない状態になることがあるので、毎回使用可能か確認する。
-                // フォーカスがサポートされているか確認する
-                if currentDevice.isFocusModeSupported(.autoFocus) && currentDevice.isFocusPointOfInterestSupported {
-                    currentDevice.focusPointOfInterest = point
-                    currentDevice.focusMode = .autoFocus
-                }
-                // 露光の調整
-                currentDevice.exposurePointOfInterest = point
-                currentDevice.exposureMode = .autoExpose
-                
-                currentDevice.unlockForConfiguration()
-                
-            }else{
-                print("デバイスがない")
+        //        do {
+        if let currentDevice = videoDevice {
+            try? currentDevice.lockForConfiguration()
+            // TODO: カメラ切り替え後にたまにフォーカスがサポートされていない状態になることがあるので、毎回使用可能か確認する。
+            // フォーカスがサポートされているか確認する
+            if currentDevice.isFocusModeSupported(.autoFocus) && currentDevice.isFocusPointOfInterestSupported {
+                currentDevice.focusPointOfInterest = point
+                currentDevice.focusMode = .autoFocus
             }
-//        } catch let error {
-//            debugPrint(error)
-//        }
+            // 露光の調整
+            currentDevice.exposurePointOfInterest = point
+            currentDevice.exposureMode = .autoExpose
+            
+            currentDevice.unlockForConfiguration()
+            
+        }else{
+            print("デバイスがない")
+        }
+        //        } catch let error {
+        //            debugPrint(error)
+        //        }
     }
     
     
@@ -399,7 +433,7 @@ extension RecordModel: RecordModelInput {
                 // カメラが切り替わったらジェスチャーをリセットして、ピンチジェスチャーの値をリセットする
                 currentZoomScale = self.beforeZoomScale
                 camera.videoZoomFactor = self.beforeZoomScale
-//                self.presenter?.resetPinchGestureRecognizer()
+                //                self.presenter?.resetPinchGestureRecognizer()
             }else{
                 // 画面から指が離れたときに保持している前回のズーム値を更新する
                 if state {
